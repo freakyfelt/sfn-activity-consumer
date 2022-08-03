@@ -1,0 +1,16 @@
+services:
+  test:
+    build:
+      context: .
+    volumes:
+      - .:/app
+    depends_on:
+      - sfn
+    environment:
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=awsAccessKeyId
+      - AWS_SECRET_ACCESS_KEY=awsSecretAccessKey
+      - SFN_ENDPOINT=http://sfn:8083
+
+  sfn:
+    image: amazon/aws-stepfunctions-local:latest

@@ -1,4 +1,5 @@
 import { GetActivityTaskOutput } from "@aws-sdk/client-sfn";
+import { TaskRequest } from "./request";
 import { TaskResponse } from "./response";
 
 export class ActivityWorkerError extends Error {}
@@ -20,17 +21,33 @@ export class InvalidTaskInputError extends TaskRequestError {
 
 export class TaskResponseError extends ActivityWorkerError {}
 
+export class NoResponseSentError<TInput = unknown> extends TaskResponseError {
+  private req: TaskRequest<TInput>;
+
+  constructor(req: TaskRequest<TInput>) {
+    super("No response sent after handling");
+
+    Object.setPrototypeOf(this, NoResponseSentError.prototype);
+    this.name = "NoResponseSentError";
+
+    this.req = req;
+  }
+}
+
 export class ResponseAlreadySentError<
+  TInput = unknown,
   TOutput = unknown
 > extends TaskResponseError {
+  readonly req: TaskRequest<TInput>;
   readonly res: TaskResponse<TOutput>;
 
-  constructor(res: TaskResponse<TOutput>) {
+  constructor(req: TaskRequest<TInput>, res: TaskResponse<TOutput>) {
     super("Task response already sent");
 
     Object.setPrototypeOf(this, ResponseAlreadySentError.prototype);
     this.name = "ResponseAlreadySentError";
 
+    this.req = req;
     this.res = res;
   }
 }

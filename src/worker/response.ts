@@ -6,8 +6,8 @@ import {
   SFNClient,
 } from "@aws-sdk/client-sfn";
 import { ResponseAlreadySentError } from "./errors";
-
-import { ActivityTask } from "./types";
+import { TaskEventEmitter } from "./events";
+import { TaskRequest } from "./request";
 
 export type SuccessTaskResponse<TOutput> = {
   result: "success";
@@ -26,25 +26,32 @@ export type TaskResponse<TOutput> =
   | SuccessTaskResponse<TOutput>
   | FailureTaskResponse;
 
-export interface TaskResponseToolkitParams {
+export interface TaskResponseToolkitParams<TInput, TOutput> {
   client: SFNClient;
-  task: ActivityTask;
+  events: TaskEventEmitter<TInput, TOutput>;
+  req: TaskRequest<TInput>;
 }
 
 type FailureInput = Omit<SendTaskFailureCommandInput, "taskToken">;
 
-export class TaskResponseToolkit<TOutput> {
+export class TaskResponseToolkit<TInput, TOutput> {
   private client: SFNClient;
-  private task: ActivityTask;
+  public readonly events: TaskEventEmitter<TInput, TOutput>;
 
+  private taskToken: string;
+
+  #req: TaskRequest<TInput>;
   #res: TaskResponse<TOutput> | null;
 
-  constructor(params: TaskResponseToolkitParams) {
-    const { client, task } = params;
+  constructor(params: TaskResponseToolkitParams<TInput, TOutput>) {
+    const { client, events, req } = params;
 
     this.client = client;
-    this.task = task;
+    this.events = events;
+    // explicitly grab a copy so it can't accidentally be mutated by the handler
+    this.taskToken = String(req.task.taskToken);
 
+    this.#req = req;
     this.#res = null;
   }
 
@@ -55,19 +62,21 @@ export class TaskResponseToolkit<TOutput> {
   async heartbeat() {
     await this.client.send(
       new SendTaskHeartbeatCommand({
-        taskToken: this.task.taskToken,
+        taskToken: this.taskToken,
       })
     );
+
+    this.events.emit("task:heartbeat", this.#req);
   }
 
   async success(output: TOutput) {
     if (this.#res) {
-      throw new ResponseAlreadySentError(this.#res);
+      throw new ResponseAlreadySentError(this.#req, this.#res);
     }
 
     await this.client.send(
       new SendTaskSuccessCommand({
-        taskToken: this.task.taskToken,
+        taskToken: this.taskToken,
         output: JSON.stringify(output),
       })
     );
@@ -77,12 +86,12 @@ export class TaskResponseToolkit<TOutput> {
 
   async failure({ error, cause }: FailureInput) {
     if (this.#res) {
-      throw new ResponseAlreadySentError(this.#res);
+      throw new ResponseAlreadySentError(this.#req, this.#res);
     }
 
     await this.client.send(
       new SendTaskFailureCommand({
-        taskToken: this.task.taskToken,
+        taskToken: this.taskToken,
         error,
         cause,
       })

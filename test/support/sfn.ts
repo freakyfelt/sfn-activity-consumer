@@ -4,12 +4,22 @@ import {
   DeleteActivityCommand,
   DeleteStateMachineCommand,
   DescribeExecutionCommand,
+  SendTaskSuccessCommand,
   SFNClient,
   StartExecutionCommand,
   StopExecutionCommand,
 } from "@aws-sdk/client-sfn";
+
 import assert from "assert";
+
 import { TaskInput } from "./handler";
+import { waitForCondition } from "./wait";
+
+const randomStr = (len = 5) =>
+  Math.random()
+    .toString(36)
+    .replace(/[^a-z]+/g, "")
+    .slice(0, len);
 
 export const createSFNClient = () => {
   return new SFNClient({
@@ -17,21 +27,35 @@ export const createSFNClient = () => {
   });
 };
 
-const ensureActivity = async (client: SFNClient) => {
-  const cmd = new CreateActivityCommand({
-    name: "TestActivity",
-  });
-
-  const res = await client.send(cmd);
+type EnsureActivityParams = {
+  activityName: string;
+};
+const ensureActivity = async (
+  client: SFNClient,
+  { activityName }: EnsureActivityParams
+) => {
+  const res = await client.send(
+    new CreateActivityCommand({
+      name: activityName,
+    })
+  );
 
   assert.ok(res.activityArn);
 
   return res.activityArn;
 };
 
-const ensureStateMachine = async (client: SFNClient, activityArn: string) => {
+type EnsureStateMachineParams = {
+  activityArn: string;
+  stateMachineName: string;
+};
+
+const ensureStateMachine = async (
+  client: SFNClient,
+  { activityArn, stateMachineName }: EnsureStateMachineParams
+) => {
   const cmd = new CreateStateMachineCommand({
-    name: "TestStateMachine",
+    name: stateMachineName,
     roleArn: "arn:aws:iam::123456789012:role/DummyRole",
     definition: JSON.stringify({
       StartAt: "OurTask",
@@ -51,13 +75,6 @@ const ensureStateMachine = async (client: SFNClient, activityArn: string) => {
   return stateMachineArn ?? "";
 };
 
-export const prepareSFNEnvironment = async (client: SFNClient) => {
-  const activityArn = await ensureActivity(client);
-  const stateMachineArn = await ensureStateMachine(client, activityArn);
-
-  return { activityArn, stateMachineArn };
-};
-
 export class SFNTestBootstrapper {
   public client: SFNClient;
   public activityArn: string;
@@ -70,11 +87,14 @@ export class SFNTestBootstrapper {
   }
 
   async prepare() {
-    this.activityArn = await ensureActivity(this.client);
-    this.stateMachineArn = await ensureStateMachine(
-      this.client,
-      this.activityArn
-    );
+    const activityName = `TestActivity-${randomStr()}`;
+    const stateMachineName = `TestActivity-${randomStr()}`;
+
+    this.activityArn = await ensureActivity(this.client, { activityName });
+    this.stateMachineArn = await ensureStateMachine(this.client, {
+      activityArn: this.activityArn,
+      stateMachineName,
+    });
   }
 
   async eject() {
@@ -101,8 +121,23 @@ export class SFNTestBootstrapper {
     return executionArn ?? "";
   }
 
-  async stopExecution(executionArn: string) {
+  async stopExecution(executionArn: string, taskToken?: string) {
     await this.client.send(new StopExecutionCommand({ executionArn }));
+
+    await waitForCondition(async () => {
+      const status = await this.checkExecutionStatus(executionArn);
+      return status !== "RUNNING";
+    });
+
+    if (taskToken) {
+      try {
+        await this.client.send(
+          new SendTaskSuccessCommand({ taskToken, output: "{}" })
+        );
+      } catch (err) {
+        // noop as closed tasks will throw a 'Task Timed Out' error
+      }
+    }
   }
 
   async checkExecutionStatus(executionArn: string) {

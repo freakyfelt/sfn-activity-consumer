@@ -7,5 +7,5 @@ export type ActivityTask = Ensure<GetActivityTaskOutput, "taskToken" | "input">;
 
 export type TaskHandler<TInput, TOutput> = (
   req: TaskRequest<TInput>,
-  res: TaskResponseToolkit<TOutput>
+  res: TaskResponseToolkit<TInput, TOutput>
 ) => Promise<void>;

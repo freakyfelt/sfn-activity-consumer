@@ -29,7 +29,7 @@ export type TaskResponse<TOutput> =
 export interface TaskResponseToolkitParams<TInput, TOutput> {
   client: SFNClient;
   events: TaskEventEmitter<TInput, TOutput>;
-  req: TaskRequest<TInput>;
+  req: TaskRequest<TInput, TOutput>;
 }
 
 type FailureInput = Omit<SendTaskFailureCommandInput, "taskToken">;
@@ -40,7 +40,7 @@ export class TaskResponseToolkit<TInput, TOutput> {
 
   private taskToken: string;
 
-  #req: TaskRequest<TInput>;
+  #req: TaskRequest<TInput, TOutput>;
   #res: TaskResponse<TOutput> | null;
 
   constructor(params: TaskResponseToolkitParams<TInput, TOutput>) {

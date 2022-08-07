@@ -1,22 +1,18 @@
-import { ActivityWorkerConfig } from "./activity-worker";
+import { ActivityWorker, ActivityWorkerConfig } from "./activity-worker";
 import { InvalidTaskInputError } from "./errors";
+import { RawTask } from "./events";
 import { ActivityTask } from "./types";
 
-export interface TaskRequest<TInput> {
-  activity: ActivityWorkerConfig;
+export interface TaskRequest<TInput, TOutput> {
+  worker: ActivityWorker<TInput, TOutput>;
   task: ActivityTask;
   input: TInput;
 }
 
-interface ToTaskRequestParams {
-  activity: ActivityWorkerConfig;
-  task: ActivityTask;
-}
-
-export function toTaskRequest<TInput>(
-  params: ToTaskRequestParams
-): TaskRequest<TInput> {
-  const { activity, task } = params;
+export function toTaskRequest<TInput, TOutput>(
+  params: RawTask<TInput, TOutput>
+): TaskRequest<TInput, TOutput> {
+  const { worker, task } = params;
 
   let input;
   try {
@@ -26,7 +22,7 @@ export function toTaskRequest<TInput>(
   }
 
   return {
-    activity,
+    worker,
     input,
     task,
   };

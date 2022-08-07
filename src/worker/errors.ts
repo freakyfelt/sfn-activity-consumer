@@ -21,10 +21,10 @@ export class InvalidTaskInputError extends TaskRequestError {
 
 export class TaskResponseError extends ActivityWorkerError {}
 
-export class NoResponseSentError<TInput = unknown> extends TaskResponseError {
-  private req: TaskRequest<TInput>;
+export class NoResponseSentError<TInput = unknown, TOutput = unknown> extends TaskResponseError {
+  private req: TaskRequest<TInput, TOutput>;
 
-  constructor(req: TaskRequest<TInput>) {
+  constructor(req: TaskRequest<TInput, TOutput>) {
     super("No response sent after handling");
 
     Object.setPrototypeOf(this, NoResponseSentError.prototype);
@@ -38,10 +38,10 @@ export class ResponseAlreadySentError<
   TInput = unknown,
   TOutput = unknown
 > extends TaskResponseError {
-  readonly req: TaskRequest<TInput>;
+  readonly req: TaskRequest<TInput, TOutput>;
   readonly res: TaskResponse<TOutput>;
 
-  constructor(req: TaskRequest<TInput>, res: TaskResponse<TOutput>) {
+  constructor(req: TaskRequest<TInput, TOutput>, res: TaskResponse<TOutput>) {
     super("Task response already sent");
 
     Object.setPrototypeOf(this, ResponseAlreadySentError.prototype);

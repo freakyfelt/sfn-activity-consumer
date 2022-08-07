@@ -6,7 +6,10 @@ import { TaskRequest } from "./request";
 import { TaskResponse } from "./response";
 import { WorkerExitOutput } from "./types";
 
-export type RawTask = Omit<TaskRequest<never>, "input">;
+export type RawTask<TInput, TOutput> = Omit<
+  TaskRequest<TInput, TOutput>,
+  "input"
+>;
 
 export const WorkerEventKeys = {
   starting: "worker:starting",
@@ -78,21 +81,24 @@ export type PollingEvents<TInput, TOutput> = {
 
 export type TaskEvents<TInput, TOutput> = {
   /** emitted when a task is received before parsing */
-  [TaskEventKeys.received]: (raw: RawTask) => void;
+  [TaskEventKeys.received]: (raw: RawTask<TInput, TOutput>) => void;
   /** emitted when an unhandled exception was thrown when processing */
-  [TaskEventKeys.errored]: (raw: RawTask, err: unknown) => void;
+  [TaskEventKeys.errored]: (
+    raw: RawTask<TInput, TOutput>,
+    err: unknown
+  ) => void;
   /** emitted at the end of the task regardless of success or failure */
-  [TaskEventKeys.done]: (raw: RawTask) => void;
+  [TaskEventKeys.done]: (raw: RawTask<TInput, TOutput>) => void;
 
   /** emitted after parsing but before calling the handler */
-  [TaskEventKeys.start]: (req: TaskRequest<TInput>) => void;
-  [TaskEventKeys.heartbeat]: (req: TaskRequest<TInput>) => void;
+  [TaskEventKeys.start]: (req: TaskRequest<TInput, TOutput>) => void;
+  [TaskEventKeys.heartbeat]: (req: TaskRequest<TInput, TOutput>) => void;
   [TaskEventKeys.success]: (
-    req: TaskRequest<TInput>,
+    req: TaskRequest<TInput, TOutput>,
     res: TaskResponse<TOutput>
   ) => void;
   [TaskEventKeys.failure]: (
-    req: TaskRequest<TInput>,
+    req: TaskRequest<TInput, TOutput>,
     res: TaskResponse<TOutput>
   ) => void;
 };

@@ -6,16 +6,16 @@ import { TaskResponseToolkit } from "./response";
 export type ActivityTask = Ensure<GetActivityTaskOutput, "taskToken" | "input">;
 
 export type TaskHandler<TInput, TOutput> = (
-  req: TaskRequest<TInput>,
+  req: TaskRequest<TInput, TOutput>,
   res: TaskResponseToolkit<TInput, TOutput>
 ) => Promise<void>;
 
-export enum WorkerExitCode {
-  "success" = 0,
-  "err_polling",
-}
+export const WorkerExitCode = {
+  success: 0,
+  err_polling: 10,
+} as const;
 
 export type WorkerExitOutput = {
-  code: WorkerExitCode;
+  code: number;
   err?: unknown;
 };

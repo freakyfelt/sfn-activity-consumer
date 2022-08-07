@@ -13,7 +13,12 @@ import { NoResponseSentError } from "./errors";
 import { WorkerEventEmitter } from "./events";
 import { toTaskRequest } from "./request";
 import { TaskResponseToolkit } from "./response";
-import { TaskHandler, WorkerExitCode, WorkerExitOutput } from "./types";
+import {
+  ActivityTask,
+  TaskHandler,
+  WorkerExitCode,
+  WorkerExitOutput,
+} from "./types";
 
 type PollingConfig = {
   /** max number of polls before stopping the worker in an errored state */
@@ -114,35 +119,7 @@ export class ActivityWorker<TInput, TOutput> {
       return;
     }
 
-    const activity = { ...this.config };
-    const events = this.events;
-
-    events.emit("task:received", { activity, task });
-
-    let req, h;
-
-    try {
-      req = toTaskRequest<TInput>({ activity, task });
-      h = new TaskResponseToolkit<TInput, TOutput>({
-        client: this.client,
-        events,
-        req,
-      });
-
-      this.events.emit("task:start", req);
-
-      await this.handler(req, h);
-
-      if (!h.res) {
-        throw new NoResponseSentError(req);
-      }
-    } catch (err) {
-      events.emit("task:errored", { activity, task }, err);
-
-      throw err;
-    } finally {
-      events.emit("task:done", { activity, task });
-    }
+    await this.handleTask(task);
   }
 
   private async runLoop() {
@@ -150,7 +127,16 @@ export class ActivityWorker<TInput, TOutput> {
     this.events.emit("worker:running", this);
 
     while (this.#status === "running") {
-      await this.runOnce();
+      const task = await this.getActivityTask();
+      if (!task) {
+        continue;
+      }
+
+      try {
+        await this.handleTask(task);
+      } catch (err) {
+        // assuming for now that the event is sufficient here
+      }
     }
 
     this.#status = "stopped";
@@ -212,7 +198,7 @@ export class ActivityWorker<TInput, TOutput> {
     return task;
   }
 
-  async handleStop(code: WorkerExitCode, err?: unknown) {
+  private async handleStop(code: number, err?: unknown) {
     this.#exitOutput = { code, err };
 
     return new Promise((resolve) => {
@@ -223,5 +209,38 @@ export class ActivityWorker<TInput, TOutput> {
 
       this.#shutdownSignal.abort();
     });
+  }
+
+  private async handleTask(task: ActivityTask) {
+    const events = this.events;
+
+    const rawTask = { worker: this, task };
+
+    events.emit("task:received", rawTask);
+
+    let req, h;
+
+    try {
+      req = toTaskRequest<TInput, TOutput>(rawTask);
+      h = new TaskResponseToolkit<TInput, TOutput>({
+        client: this.client,
+        events,
+        req,
+      });
+
+      this.events.emit("task:start", req);
+
+      await this.handler(req, h);
+
+      if (!h.res) {
+        throw new NoResponseSentError(req);
+      }
+    } catch (err) {
+      events.emit("task:errored", rawTask, err);
+
+      throw err;
+    } finally {
+      events.emit("task:done", rawTask);
+    }
   }
 }

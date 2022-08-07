@@ -1,18 +1,15 @@
+import { ActivityWorkerConfig } from "./activity-worker";
 import { InvalidTaskInputError } from "./errors";
 import { ActivityTask } from "./types";
 
-interface ActivityConfig {
-  activityArn: string;
-}
-
 export interface TaskRequest<TInput> {
-  activity: ActivityConfig;
+  activity: ActivityWorkerConfig;
   task: ActivityTask;
   input: TInput;
 }
 
 interface ToTaskRequestParams {
-  activity: ActivityConfig;
+  activity: ActivityWorkerConfig;
   task: ActivityTask;
 }
 

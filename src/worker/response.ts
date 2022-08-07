@@ -82,6 +82,7 @@ export class TaskResponseToolkit<TInput, TOutput> {
     );
 
     this.#res = { result: "success", output };
+    this.events.emit("task:success", this.#req, this.#res);
   }
 
   async failure({ error, cause }: FailureInput) {
@@ -98,5 +99,6 @@ export class TaskResponseToolkit<TInput, TOutput> {
     );
 
     this.#res = { result: "failure", error, cause };
+    this.events.emit("task:failure", this.#req, this.#res);
   }
 }

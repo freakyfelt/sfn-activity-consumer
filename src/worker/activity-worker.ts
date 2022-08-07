@@ -1,21 +1,38 @@
 import {
   GetActivityTaskCommand,
   GetActivityTaskCommandOutput,
+  GetActivityTaskOutput,
   SFNClient,
 } from "@aws-sdk/client-sfn";
 import { AbortController } from "@aws-sdk/abort-controller";
 
 import EventEmitter from "events";
+import { setTimeout } from "timers/promises";
 
 import { NoResponseSentError } from "./errors";
-import { TaskEventEmitter } from "./events";
+import { WorkerEventEmitter } from "./events";
 import { toTaskRequest } from "./request";
 import { TaskResponseToolkit } from "./response";
-import { TaskHandler } from "./types";
+import { TaskHandler, WorkerExitCode, WorkerExitOutput } from "./types";
 
-type ActivityWorkerConfig = {
+type PollingConfig = {
+  /** max number of polls before stopping the worker in an errored state */
+  maxAttempts: number;
+  /** wait this amount of time before attempting a failed poll retry */
+  intervalSeconds: number;
+  backoffRate: number;
+};
+
+const DEFAULT_POLLING_CONFIG: PollingConfig = {
+  intervalSeconds: 1,
+  maxAttempts: 5,
+  backoffRate: 1.2,
+};
+
+export type ActivityWorkerConfig = {
   activityArn: string;
   workerName?: string;
+  polling?: PollingConfig;
 };
 
 interface ActivityWorkerParams<TInput, TOutput> {
@@ -25,15 +42,20 @@ interface ActivityWorkerParams<TInput, TOutput> {
   client?: SFNClient;
 }
 
+type ActivityWorkerStatus = "starting" | "running" | "stopping" | "stopped";
+
 export class ActivityWorker<TInput, TOutput> {
-  public readonly events: TaskEventEmitter<TInput, TOutput>;
+  public readonly events: WorkerEventEmitter<TInput, TOutput>;
   private config: ActivityWorkerConfig;
+  private pollingConfig: PollingConfig;
 
   private client: SFNClient;
   private handler: TaskHandler<TInput, TOutput>;
 
-  #status: "starting" | "running" | "stopping" | "stopped" | "error";
+  #status: ActivityWorkerStatus;
   #shutdownSignal: AbortController;
+  #failedPolls: number;
+  #exitOutput?: WorkerExitOutput;
 
   constructor(params: ActivityWorkerParams<TInput, TOutput>) {
     this.config = params.config;
@@ -41,14 +63,53 @@ export class ActivityWorker<TInput, TOutput> {
     this.client = params.client ?? new SFNClient({});
     this.handler = params.handler;
 
-    this.events = new EventEmitter() as TaskEventEmitter<TInput, TOutput>;
+    this.events = new EventEmitter() as WorkerEventEmitter<TInput, TOutput>;
     this.#status = "stopped";
     this.#shutdownSignal = new AbortController();
+
+    this.pollingConfig = params.config.polling ?? { ...DEFAULT_POLLING_CONFIG };
+    this.#failedPolls = 0;
+  }
+
+  get status(): ActivityWorkerStatus {
+    return String(this.#status) as ActivityWorkerStatus;
+  }
+
+  get exitOutput(): WorkerExitOutput | null {
+    return this.#exitOutput ? { ...this.#exitOutput } : null;
+  }
+
+  async start() {
+    if (this.#status === "running") {
+      return;
+    }
+
+    return new Promise((resolve) => {
+      this.#status = "starting";
+
+      this.events.emit("worker:starting", this);
+      this.events.once("worker:running", resolve);
+
+      process.nextTick(() =>
+        this.runLoop().catch((err) => {
+          return this.handleStop(WorkerExitCode.err_polling, err);
+        })
+      );
+    });
+  }
+
+  async stop() {
+    if (this.#status === "stopped") {
+      return;
+    }
+
+    return this.handleStop(WorkerExitCode.success);
   }
 
   /** Performs a single task fetch and executes it if present */
-  async poll() {
-    const task = await this.pollForTask();
+  async runOnce() {
+    // keep this outside of the try/catch so that failed polls bubble up
+    const task = await this.getActivityTask();
     if (!task) {
       return;
     }
@@ -71,6 +132,10 @@ export class ActivityWorker<TInput, TOutput> {
       this.events.emit("task:start", req);
 
       await this.handler(req, h);
+
+      if (!h.res) {
+        throw new NoResponseSentError(req);
+      }
     } catch (err) {
       events.emit("task:errored", { activity, task }, err);
 
@@ -78,32 +143,66 @@ export class ActivityWorker<TInput, TOutput> {
     } finally {
       events.emit("task:done", { activity, task });
     }
-
-    const res = h.res;
-    if (!res) {
-      throw new NoResponseSentError(req);
-    }
-
-    if (res.result === "success") {
-      events.emit("task:success", req, res);
-    } else if (res.result === "failure") {
-      events.emit("task:failure", req, res);
-    }
   }
 
-  private async pollForTask() {
+  private async runLoop() {
+    this.#status = "running";
+    this.events.emit("worker:running", this);
+
+    while (this.#status === "running") {
+      await this.runOnce();
+    }
+
+    this.#status = "stopped";
+    this.events.emit("worker:stopped", this, this.#exitOutput);
+  }
+
+  private async getActivityTask(): Promise<GetActivityTaskOutput | null> {
+    this.events.emit("polling:starting", this);
+
     let task: GetActivityTaskCommandOutput;
 
     try {
       const cmd = new GetActivityTaskCommand(this.config);
 
-      task = await this.client.send(cmd);
+      task = await this.client.send(cmd, {
+        abortSignal: this.#shutdownSignal.signal,
+      });
+
+      this.#failedPolls = 0;
+
+      this.events.emit("polling:success", this, task);
     } catch (err) {
+      // Handled exception: shutdown signal was sent
       if (err instanceof Error && err.name === "AbortError") {
         return null;
       }
 
-      throw err;
+      this.#failedPolls += 1;
+      const isRetriable = this.#failedPolls < this.pollingConfig.maxAttempts;
+
+      this.events.emit("polling:error", this, {
+        retriable: isRetriable,
+        attempts: this.#failedPolls,
+        err,
+      });
+
+      if (!isRetriable) {
+        throw err;
+      }
+
+      const { intervalSeconds, backoffRate } = this.pollingConfig;
+      const intervalMs = intervalSeconds * 1000;
+
+      // 3s w/1.5 backoff rate:
+      // #1: 3s (3s + (3s * 1.5 * 0))
+      // #2: 4.5s (3s + (3s * 1.5 * 1))
+      // #3: 12s (3s + (3s * 1.5 * 2))
+      const sleepMs =
+        intervalMs + intervalMs * backoffRate * (this.#failedPolls - 1);
+      await setTimeout(sleepMs);
+
+      return this.getActivityTask();
     }
 
     if (!task?.taskToken) {
@@ -111,5 +210,18 @@ export class ActivityWorker<TInput, TOutput> {
     }
 
     return task;
+  }
+
+  async handleStop(code: WorkerExitCode, err?: unknown) {
+    this.#exitOutput = { code, err };
+
+    return new Promise((resolve) => {
+      this.#status = "stopping";
+
+      this.events.emit("worker:stopping", this);
+      this.events.once("worker:stopped", resolve);
+
+      this.#shutdownSignal.abort();
+    });
   }
 }

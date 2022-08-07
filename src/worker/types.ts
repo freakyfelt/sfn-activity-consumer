@@ -9,3 +9,13 @@ export type TaskHandler<TInput, TOutput> = (
   req: TaskRequest<TInput>,
   res: TaskResponseToolkit<TInput, TOutput>
 ) => Promise<void>;
+
+export enum WorkerExitCode {
+  "success" = 0,
+  "err_polling",
+}
+
+export type WorkerExitOutput = {
+  code: WorkerExitCode;
+  err?: unknown;
+};

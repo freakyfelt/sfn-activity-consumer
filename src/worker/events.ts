@@ -1,9 +1,27 @@
+import { GetActivityTaskOutput } from "@aws-sdk/client-sfn";
 import TypedEmitter from "typed-emitter";
 
+import { ActivityWorker } from "./activity-worker";
 import { TaskRequest } from "./request";
 import { TaskResponse } from "./response";
+import { WorkerExitOutput } from "./types";
 
 export type RawTask = Omit<TaskRequest<never>, "input">;
+
+export const WorkerEventKeys = {
+  starting: "worker:starting",
+  running: "worker:running",
+  stopping: "worker:stopping",
+  stopped: "worker:stopped",
+
+  error: "worker:error",
+} as const;
+
+export const PollingEventKeys = {
+  starting: "polling:starting",
+  success: "polling:success",
+  error: "polling:error",
+} as const;
 
 export const TaskEventKeys = {
   received: "task:received",
@@ -14,6 +32,49 @@ export const TaskEventKeys = {
   success: "task:success",
   failure: "task:failure",
 } as const;
+
+export const AllEventKeys = [
+  ...Object.values(WorkerEventKeys),
+  ...Object.values(PollingEventKeys),
+  ...Object.values(TaskEventKeys),
+] as const;
+
+export type WorkerEvents<TInput, TOutput> = {
+  [WorkerEventKeys.starting]: (worker: ActivityWorker<TInput, TOutput>) => void;
+  [WorkerEventKeys.running]: (worker: ActivityWorker<TInput, TOutput>) => void;
+  /** The worker is gracefully shutting down */
+  [WorkerEventKeys.stopping]: (worker: ActivityWorker<TInput, TOutput>) => void;
+  /** The worker is completely stopped */
+  [WorkerEventKeys.stopped]: (
+    worker: ActivityWorker<TInput, TOutput>,
+    exit?: WorkerExitOutput
+  ) => void;
+
+  [WorkerEventKeys.error]: (
+    worker: ActivityWorker<TInput, TOutput>,
+    err: any
+  ) => void;
+};
+
+type PollingErrorEventPayload = {
+  retriable: boolean;
+  attempts: number;
+  err: unknown;
+};
+
+export type PollingEvents<TInput, TOutput> = {
+  [PollingEventKeys.starting]: (
+    worker: ActivityWorker<TInput, TOutput>
+  ) => void;
+  [PollingEventKeys.success]: (
+    worker: ActivityWorker<TInput, TOutput>,
+    output: GetActivityTaskOutput
+  ) => void;
+  [PollingEventKeys.error]: (
+    worker: ActivityWorker<TInput, TOutput>,
+    output: PollingErrorEventPayload
+  ) => void;
+};
 
 export type TaskEvents<TInput, TOutput> = {
   /** emitted when a task is received before parsing */
@@ -36,6 +97,14 @@ export type TaskEvents<TInput, TOutput> = {
   ) => void;
 };
 
+export type AllEvents<TInput, TOutput> = WorkerEvents<TInput, TOutput> &
+  PollingEvents<TInput, TOutput> &
+  TaskEvents<TInput, TOutput>;
+
 export type TaskEventEmitter<TInput, TOutput> = TypedEmitter<
   TaskEvents<TInput, TOutput>
+>;
+
+export type WorkerEventEmitter<TInput, TOutput> = TypedEmitter<
+  AllEvents<TInput, TOutput>
 >;

@@ -1,6 +1,11 @@
-import { SendTaskSuccessCommand } from "@aws-sdk/client-sfn";
-import { ActivityWorker } from "../../src";
-import { TaskEventKeys, TaskEvents } from "../../src/worker/events";
+import { SendTaskHeartbeatCommand } from "@aws-sdk/client-sfn";
+import {
+  ActivityWorker,
+  NoResponseSentError,
+  ResponseAlreadySentError,
+  WorkerExitCode,
+} from "../../src";
+import { AllEventKeys, AllEvents } from "../../src/worker/events";
 import {
   MyError,
   taskHandler,
@@ -17,7 +22,8 @@ describe("ActivityWorker", () => {
   let executionArn: string;
   let taskToken: string | undefined;
 
-  let events: Record<keyof TaskEvents<TaskInput, TaskOutput>, Array<any>>;
+  let emittedEvents: Record<keyof AllEvents<TaskInput, TaskOutput>, Array<any>>;
+  let orderedEventKeys: Array<keyof AllEvents<unknown, unknown>>;
 
   beforeAll(async () => {
     bootstrapper = new SFNTestBootstrapper();
@@ -33,6 +39,11 @@ describe("ActivityWorker", () => {
       client: bootstrapper.client,
       config: {
         activityArn: bootstrapper.activityArn,
+        polling: {
+          maxAttempts: 1,
+          backoffRate: 1.0,
+          intervalSeconds: 0.1,
+        },
       },
       handler: taskHandler,
     });
@@ -40,9 +51,13 @@ describe("ActivityWorker", () => {
       taskToken = task.taskToken;
     });
 
-    events = Object.values(TaskEventKeys).reduce((acc, event) => {
+    orderedEventKeys = [];
+    emittedEvents = Object.values(AllEventKeys).reduce((acc, event) => {
       acc[event] = [];
-      worker.events.on(event, (...args: any[]) => events[event].push(args));
+      worker.events.on(event, (...args: any[]) => {
+        orderedEventKeys.push(event);
+        emittedEvents[event].push(args);
+      });
 
       return acc;
     }, {} as any);
@@ -52,47 +67,127 @@ describe("ActivityWorker", () => {
     if (executionArn) {
       await bootstrapper.stopExecution(executionArn, taskToken);
     }
+    await worker.stop();
   });
 
-  it("polls and processes tasks", async () => {
-    executionArn = await bootstrapper.startExecution({ hello: "World" });
-    await worker.poll();
+  describe("lifecycle methods", () => {
+    it("waits to start and stop", async () => {
+      const startupEvents = [
+        "worker:starting",
+        "worker:running",
+        "polling:starting",
+      ];
+      const shutdownEvents = ["worker:stopping", "worker:stopped"];
 
-    const status = await bootstrapper.checkExecutionStatus(executionArn);
-    expect(status).toEqual("SUCCEEDED");
+      await worker.start();
+      expect(worker.status).toEqual("running");
+      expect(orderedEventKeys).toEqual(startupEvents);
 
-    expect(events["task:received"]).toHaveLength(1);
-    expect(events["task:start"]).toHaveLength(1);
-    expect(events["task:success"]).toHaveLength(1);
-    expect(events["task:done"]).toHaveLength(1);
+      const stoppingAt = Date.now();
+      await worker.stop();
+      const stopDurationMs = Date.now() - stoppingAt;
+
+      expect(worker.status).toEqual("stopped");
+      expect(worker.exitOutput).toEqual({ code: WorkerExitCode.success });
+      expect(orderedEventKeys).toEqual([...startupEvents, ...shutdownEvents]);
+      // Ensure that we are using our stop signal
+      expect(stopDurationMs).toBeLessThan(10_000);
+    });
   });
 
-  it("polls and sends failures", async () => {
-    executionArn = await bootstrapper.startExecution({ hello: "Failure" });
-    await worker.poll();
+  describe("runOnce", () => {
+    it("polls and processes tasks", async () => {
+      executionArn = await bootstrapper.startExecution({ hello: "World" });
+      await worker.runOnce();
 
-    await waitForCondition(async () => {
       const status = await bootstrapper.checkExecutionStatus(executionArn);
-      return status === "FAILED";
+      expect(status).toEqual("SUCCEEDED");
+
+      expect(orderedEventKeys).toEqual([
+        "polling:starting",
+        "polling:success",
+        "task:received",
+        "task:start",
+        "task:success",
+        "task:done",
+      ]);
     });
 
-    expect(events["task:received"]).toHaveLength(1);
-    expect(events["task:start"]).toHaveLength(1);
-    expect(events["task:failure"]).toHaveLength(1);
-    expect(events["task:done"]).toHaveLength(1);
-  });
+    it("allows for heartbeats to be sent", async () => {
+      executionArn = await bootstrapper.startExecution({ hello: "Heartbeat" });
 
-  it("throws unhandled errors without sending a success or a failure", async () => {
-    executionArn = await bootstrapper.startExecution({ hello: "Error" });
+      await worker.runOnce();
 
-    await expect(worker.poll()).rejects.toThrowError(MyError);
+      const status = await bootstrapper.checkExecutionStatus(executionArn);
+      expect(status).toEqual("SUCCEEDED");
 
-    const status = await bootstrapper.checkExecutionStatus(executionArn);
-    expect(status).toEqual("RUNNING");
+      expect(orderedEventKeys).toEqual([
+        "polling:starting",
+        "polling:success",
+        "task:received",
+        "task:start",
+        "task:heartbeat",
+        "task:success",
+        "task:done",
+      ]);
+    });
 
-    expect(events["task:received"]).toHaveLength(1);
-    expect(events["task:start"]).toHaveLength(1);
-    expect(events["task:errored"]).toHaveLength(1);
-    expect(events["task:done"]).toHaveLength(1);
+    it("polls and sends failures", async () => {
+      executionArn = await bootstrapper.startExecution({ hello: "Failure" });
+      await worker.runOnce();
+
+      await waitForCondition(async () => {
+        const status = await bootstrapper.checkExecutionStatus(executionArn);
+        return status === "FAILED";
+      });
+
+      expect(orderedEventKeys).toEqual([
+        "polling:starting",
+        "polling:success",
+        "task:received",
+        "task:start",
+        "task:failure",
+        "task:done",
+      ]);
+    });
+
+    it("throws an exception if neither success nor failure is sent", async () => {
+      executionArn = await bootstrapper.startExecution({ hello: "Forgot" });
+
+      await expect(worker.runOnce()).rejects.toThrowError(NoResponseSentError);
+
+      const status = await bootstrapper.checkExecutionStatus(executionArn);
+      expect(status).toEqual("RUNNING");
+
+      expect(orderedEventKeys).toEqual([
+        "polling:starting",
+        "polling:success",
+        "task:received",
+        "task:start",
+        "task:errored",
+        "task:done",
+      ]);
+    });
+
+    it("throws an exception if multiple success/failure responses are sent", async () => {
+      executionArn = await bootstrapper.startExecution({ hello: "Duplicate" });
+
+      await expect(worker.runOnce()).rejects.toThrowError(
+        ResponseAlreadySentError
+      );
+
+      const status = await bootstrapper.checkExecutionStatus(executionArn);
+      expect(status).toEqual("SUCCEEDED");
+
+      expect(orderedEventKeys).toEqual([
+        "polling:starting",
+        "polling:success",
+        "task:received",
+        "task:start",
+        "task:success",
+        "task:errored",
+        "task:done",
+      ]);
+    });
   });
 });

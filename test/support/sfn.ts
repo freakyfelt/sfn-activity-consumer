@@ -4,6 +4,7 @@ import {
   DeleteActivityCommand,
   DeleteStateMachineCommand,
   DescribeExecutionCommand,
+  GetExecutionHistoryCommand,
   SendTaskSuccessCommand,
   SFNClient,
   StartExecutionCommand,
@@ -63,6 +64,7 @@ const ensureStateMachine = async (
         OurTask: {
           Type: "Task",
           Resource: activityArn,
+          HeartbeatSeconds: 3,
           End: true,
         },
       },

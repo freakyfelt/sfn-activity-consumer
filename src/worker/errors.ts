@@ -21,7 +21,10 @@ export class InvalidTaskInputError extends TaskRequestError {
 
 export class TaskResponseError extends ActivityWorkerError {}
 
-export class NoResponseSentError<TInput = unknown, TOutput = unknown> extends TaskResponseError {
+export class NoResponseSentError<
+  TInput = unknown,
+  TOutput = unknown
+> extends TaskResponseError {
   private req: TaskRequest<TInput, TOutput>;
 
   constructor(req: TaskRequest<TInput, TOutput>) {

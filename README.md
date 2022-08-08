@@ -34,7 +34,7 @@ const worker = new ActivityWorker({
   handler,
 });
 
-process.on('SIGTERM', () => worker.stop().then(process.exit(0)))
+process.on("SIGTERM", () => worker.stop().then(process.exit(0)));
 
 worker.events.on("worker:stopped", () => {
   process.exit(worker.exitOutput.code ?? 0);

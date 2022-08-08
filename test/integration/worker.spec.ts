@@ -22,6 +22,9 @@ describe("ActivityWorker", () => {
   let executionArn: string;
   let taskToken: string | undefined;
 
+  // If an exception was sent to the onUnhandledRejection callback
+  let thrownError: unknown | null;
+
   let emittedEvents: Record<keyof AllEvents<TaskInput, TaskOutput>, Array<any>>;
   let orderedEventKeys: Array<keyof AllEvents<unknown, unknown>>;
 
@@ -35,6 +38,8 @@ describe("ActivityWorker", () => {
   });
 
   beforeEach(() => {
+    thrownError = null;
+
     worker = new ActivityWorker({
       client: bootstrapper.client,
       config: {
@@ -46,6 +51,10 @@ describe("ActivityWorker", () => {
         },
       },
       handler: taskHandler,
+      // test overriding the thrown exception handler
+      onUnhandledException: (err) => {
+        thrownError = err;
+      },
     });
     worker.events.once("task:received", ({ task }) => {
       taskToken = task.taskToken;
@@ -151,10 +160,12 @@ describe("ActivityWorker", () => {
       ]);
     });
 
-    it("throws an exception if neither success nor failure is sent", async () => {
-      executionArn = await bootstrapper.startExecution({ hello: "Forgot" });
+    it("calls onUnhandledRejection if an error is thrown", async () => {
+      executionArn = await bootstrapper.startExecution({ hello: "Error" });
 
-      await expect(worker.runOnce()).rejects.toThrowError(NoResponseSentError);
+      await worker.runOnce();
+
+      expect(thrownError).toBeInstanceOf(MyError);
 
       const status = await bootstrapper.checkExecutionStatus(executionArn);
       expect(status).toEqual("RUNNING");
@@ -169,12 +180,31 @@ describe("ActivityWorker", () => {
       ]);
     });
 
-    it("throws an exception if multiple success/failure responses are sent", async () => {
+    it("calls onUnhandledRejection if neither success nor failure is sent", async () => {
+      executionArn = await bootstrapper.startExecution({ hello: "Forgot" });
+
+      await worker.runOnce();
+
+      expect(thrownError).toBeInstanceOf(NoResponseSentError);
+
+      const status = await bootstrapper.checkExecutionStatus(executionArn);
+      expect(status).toEqual("RUNNING");
+
+      expect(orderedEventKeys).toEqual([
+        "polling:starting",
+        "polling:success",
+        "task:received",
+        "task:start",
+        "task:errored",
+        "task:done",
+      ]);
+    });
+
+    it("calls onUnhandledRejection if multiple success/failure responses are sent", async () => {
       executionArn = await bootstrapper.startExecution({ hello: "Duplicate" });
 
-      await expect(worker.runOnce()).rejects.toThrowError(
-        ResponseAlreadySentError
-      );
+      await worker.runOnce();
+      expect(thrownError).toBeInstanceOf(ResponseAlreadySentError);
 
       const status = await bootstrapper.checkExecutionStatus(executionArn);
       expect(status).toEqual("SUCCEEDED");

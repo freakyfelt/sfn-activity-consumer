@@ -4,7 +4,6 @@ import {
   DeleteActivityCommand,
   DeleteStateMachineCommand,
   DescribeExecutionCommand,
-  GetExecutionHistoryCommand,
   SendTaskSuccessCommand,
   SFNClient,
   StartExecutionCommand,

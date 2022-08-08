@@ -34,6 +34,10 @@ const DEFAULT_POLLING_CONFIG: PollingConfig = {
   backoffRate: 1.2,
 };
 
+const DEFAULT_ON_UNHANDLED_EXCEPTION = (err: unknown) => {
+  throw err;
+};
+
 export type ActivityWorkerConfig = {
   activityArn: string;
   workerName?: string;
@@ -45,6 +49,11 @@ interface ActivityWorkerParams<TInput, TOutput> {
   handler: TaskHandler<TInput, TOutput>;
 
   client?: SFNClient;
+  /**
+   * Invoked if there is an unhandled task execution error
+   * Defaults to throwing and stopping the worker
+   */
+  onUnhandledException?: (err: unknown) => void;
 }
 
 type ActivityWorkerStatus = "starting" | "running" | "stopping" | "stopped";
@@ -56,6 +65,7 @@ export class ActivityWorker<TInput, TOutput> {
 
   private client: SFNClient;
   private handler: TaskHandler<TInput, TOutput>;
+  private onUnhandledException: (err: unknown) => void;
 
   #status: ActivityWorkerStatus;
   #shutdownSignal: AbortController;
@@ -67,6 +77,8 @@ export class ActivityWorker<TInput, TOutput> {
 
     this.client = params.client ?? new SFNClient({});
     this.handler = params.handler;
+    this.onUnhandledException =
+      params.onUnhandledException ?? DEFAULT_ON_UNHANDLED_EXCEPTION;
 
     this.events = new EventEmitter() as WorkerEventEmitter<TInput, TOutput>;
     this.#status = "stopped";
@@ -238,7 +250,7 @@ export class ActivityWorker<TInput, TOutput> {
     } catch (err) {
       events.emit("task:errored", rawTask, err);
 
-      throw err;
+      this.onUnhandledException(err);
     } finally {
       events.emit("task:done", rawTask);
     }

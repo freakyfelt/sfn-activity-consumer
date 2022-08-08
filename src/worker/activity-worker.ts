@@ -7,6 +7,7 @@ import {
 import { AbortController } from "@aws-sdk/abort-controller";
 
 import EventEmitter from "events";
+import os from "os";
 import { setTimeout } from "timers/promises";
 
 import { NoResponseSentError } from "./errors";
@@ -44,11 +45,18 @@ export type ActivityWorkerConfig = {
   polling?: PollingConfig;
 };
 
+type ResolvedActivityWorkerConfig = {
+  activityArn: string;
+  workerName: string;
+  polling: PollingConfig;
+};
+
 interface ActivityWorkerParams<TInput, TOutput> {
   config: ActivityWorkerConfig;
   handler: TaskHandler<TInput, TOutput>;
 
   client?: SFNClient;
+  events?: WorkerEventEmitter<TInput, TOutput>;
   /**
    * Invoked if there is an unhandled task execution error
    * Defaults to throwing and stopping the worker
@@ -60,8 +68,7 @@ type ActivityWorkerStatus = "starting" | "running" | "stopping" | "stopped";
 
 export class ActivityWorker<TInput, TOutput> {
   public readonly events: WorkerEventEmitter<TInput, TOutput>;
-  private config: ActivityWorkerConfig;
-  private pollingConfig: PollingConfig;
+  private config: ResolvedActivityWorkerConfig;
 
   private client: SFNClient;
   private handler: TaskHandler<TInput, TOutput>;
@@ -73,19 +80,28 @@ export class ActivityWorker<TInput, TOutput> {
   #exitOutput?: WorkerExitOutput;
 
   constructor(params: ActivityWorkerParams<TInput, TOutput>) {
-    this.config = params.config;
+    this.config = {
+      ...params.config,
+      workerName: params.config.workerName ?? os.hostname(),
+      polling: DEFAULT_POLLING_CONFIG,
+    };
 
     this.client = params.client ?? new SFNClient({});
     this.handler = params.handler;
     this.onUnhandledException =
       params.onUnhandledException ?? DEFAULT_ON_UNHANDLED_EXCEPTION;
 
-    this.events = new EventEmitter() as WorkerEventEmitter<TInput, TOutput>;
+    this.events =
+      params.events ??
+      (new EventEmitter() as WorkerEventEmitter<TInput, TOutput>);
+
     this.#status = "stopped";
     this.#shutdownSignal = new AbortController();
-
-    this.pollingConfig = params.config.polling ?? { ...DEFAULT_POLLING_CONFIG };
     this.#failedPolls = 0;
+  }
+
+  get workerName(): string {
+    return this.config.workerName;
   }
 
   get status(): ActivityWorkerStatus {
@@ -177,7 +193,7 @@ export class ActivityWorker<TInput, TOutput> {
       }
 
       this.#failedPolls += 1;
-      const isRetriable = this.#failedPolls < this.pollingConfig.maxAttempts;
+      const isRetriable = this.#failedPolls < this.config.polling.maxAttempts;
 
       this.events.emit("polling:error", this, {
         retriable: isRetriable,
@@ -189,7 +205,7 @@ export class ActivityWorker<TInput, TOutput> {
         throw err;
       }
 
-      const { intervalSeconds, backoffRate } = this.pollingConfig;
+      const { intervalSeconds, backoffRate } = this.config.polling;
       const intervalMs = intervalSeconds * 1000;
 
       // 3s w/1.5 backoff rate:
@@ -238,6 +254,7 @@ export class ActivityWorker<TInput, TOutput> {
         client: this.client,
         events,
         req,
+        signal: this.#shutdownSignal.signal,
       });
 
       this.events.emit("task:start", req);

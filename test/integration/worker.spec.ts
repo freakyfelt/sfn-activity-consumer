@@ -1,4 +1,3 @@
-import { SendTaskHeartbeatCommand } from "@aws-sdk/client-sfn";
 import {
   ActivityWorker,
   NoResponseSentError,
@@ -25,7 +24,10 @@ describe("ActivityWorker", () => {
   // If an exception was sent to the onUnhandledRejection callback
   let thrownError: unknown | null;
 
-  let emittedEvents: Record<keyof AllEvents<TaskInput, TaskOutput>, Array<any>>;
+  let emittedEvents: Record<
+    keyof AllEvents<TaskInput, TaskOutput>,
+    Array<unknown>
+  >;
   let orderedEventKeys: Array<keyof AllEvents<unknown, unknown>>;
 
   beforeAll(async () => {
@@ -63,7 +65,7 @@ describe("ActivityWorker", () => {
     orderedEventKeys = [];
     emittedEvents = Object.values(AllEventKeys).reduce((acc, event) => {
       acc[event] = [];
-      worker.events.on(event, (...args: any[]) => {
+      worker.events.on(event, (...args: Array<unknown>) => {
         orderedEventKeys.push(event);
         emittedEvents[event].push(args);
       });

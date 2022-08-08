@@ -29,6 +29,8 @@ export type TaskResponse<TOutput> =
 export interface TaskResponseToolkitParams<TInput, TOutput> {
   client: SFNClient;
   events: TaskEventEmitter<TInput, TOutput>;
+  signal: AbortSignal;
+
   req: TaskRequest<TInput, TOutput>;
 }
 
@@ -37,6 +39,7 @@ type FailureInput = Omit<SendTaskFailureCommandInput, "taskToken">;
 export class TaskResponseToolkit<TInput, TOutput> {
   private client: SFNClient;
   public readonly events: TaskEventEmitter<TInput, TOutput>;
+  public readonly signal: AbortSignal;
 
   private taskToken: string;
 
@@ -44,10 +47,12 @@ export class TaskResponseToolkit<TInput, TOutput> {
   #res: TaskResponse<TOutput> | null;
 
   constructor(params: TaskResponseToolkitParams<TInput, TOutput>) {
-    const { client, events, req } = params;
+    const { client, events, req, signal } = params;
 
     this.client = client;
     this.events = events;
+    this.signal = signal;
+
     // explicitly grab a copy so it can't accidentally be mutated by the handler
     this.taskToken = String(req.task.taskToken);
 

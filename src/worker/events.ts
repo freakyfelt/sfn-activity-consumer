@@ -55,7 +55,7 @@ export type WorkerEvents<TInput, TOutput> = {
 
   [WorkerEventKeys.error]: (
     worker: ActivityWorker<TInput, TOutput>,
-    err: any
+    err: unknown
   ) => void;
 };
 

@@ -1,4 +1,4 @@
-import { ActivityWorker, ActivityWorkerConfig } from "./activity-worker";
+import { ActivityWorker } from "./activity-worker";
 import { InvalidTaskInputError } from "./errors";
 import { RawTask } from "./events";
 import { ActivityTask } from "./types";

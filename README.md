@@ -51,6 +51,6 @@ worker.start().catch((err) => {
 
 ## Remaining work
 
-- [ ] Create a worker pool manager that manages the lifecycle of 1 or more workers that are polling and handling activity tasks
+- [x] Create a worker pool manager that manages the lifecycle of 1 or more workers that are polling and handling activity tasks
 - [ ] Create a consumer that manages the lifecycle of pool managers (one pool per Activity ARN)
 - [ ] Add basic OpenTelemetry (OTEL) spans

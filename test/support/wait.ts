@@ -18,6 +18,7 @@ export const waitForCondition = async (
   let remainingAttempts = opts.maxAttempts;
   let isDone = false;
   while (!isDone && remainingAttempts > 0) {
+    remainingAttempts -= 1;
     isDone = await fn();
   }
 

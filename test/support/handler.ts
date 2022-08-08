@@ -24,6 +24,7 @@ export const taskHandler: TaskHandler<TaskInput, TaskOutput> = async (
         error: "InvalidName",
         cause: "The name Duplicate is invalid",
       });
+      break;
     case "Error":
       // simulate an unhandled exception
       throw new MyError("unhandled error");
@@ -33,15 +34,15 @@ export const taskHandler: TaskHandler<TaskInput, TaskOutput> = async (
         error: "InvalidName",
         cause: "The name Failure is invalid",
       });
-      return;
+      break;
     case "Forgot":
       // simulate forgetting to send success or failure
-      return;
+      break;
     case "Heartbeat":
       // send a heartbeat and then send success
       await h.heartbeat();
       await h.success({ greeting });
-      return;
+      break;
     default:
       await h.success({ greeting });
   }
